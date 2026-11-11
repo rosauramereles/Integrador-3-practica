@@ -2,8 +2,30 @@ import { UserModel } from "../models/user.model.js";
 //matchedData: es una función de express-validator que devuelve solo los datos que pasaron las validaciones de la ruta. Los datos que no validaste no aparecen
 import { matchedData } from "express-validator";
 import { hashPassword } from "../helpers/bcrypt.helper.js";
-import { EventModel } from "../models/event.model.js";
-import { populate } from "dotenv";
+import { eventModel } from "../models/event.model.js";
+
+export const createUser = async (req, res) => {
+  try {
+    const { username, email, password, role, profile } = matchedData(req, {
+      locations: ["body"],
+    });
+
+    const hasedPassword = await hashPassword(password);
+
+    await UserModel.create({
+      username,
+      email,
+      password: hasedPassword,
+      role,
+      profile,
+    });
+
+    return res.status(201).json({ msg: "usuario registrado correctamente" });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ msg: "Error interno en el servidor" });
+  }
+};
 
 // obtener todos los usuarios activos
 export const getAllUsers = async (req, res) => {
@@ -52,84 +74,56 @@ export const getUserById = async (req, res) => {
   }
 };
 
-// actualizar un usuario activo
+// actualizar un usuario
 export const updateUser = async (req, res) => {
   try {
-    // datos que pasaron las validaciones de la ruta
-    const data = matchedData(req);
-    // separa password y profile, el resto queda en topLevelFields
-    const { password, profile, ...topLevelFields } = data;
+    // locations indica en que parte de la peticion buscar los datos
+    // "params" son los parametros de la url, como el id en /api/users/:id
+    const { id } = matchedData(req, { locations: ["params"] });
+    // "body" es el contenido que el cliente envia en la peticion (los datos nuevos)
+    // matchedData devuelve solo los campos que pasaron las validaciones
+    const dataValida = matchedData(req, { locations: ["body"] });
 
-    // si viene password, se hashea antes de guardarla
-    if (password) {
-      topLevelFields.password = await hashPassword(password);
-    }
-
-    // Construimos las claves con notación de punto para no reemplazar el perfil completo
-    const updateFields = { ...topLevelFields };
-
-    // si viene profile, se arma una clave por cada campo (profile.firstName, etc)
-    // asi se editan solo esos campos y los demas del perfil se mantienen
-    if (profile) {
-      for (const [key, value] of Object.entries(profile)) {
-        updateFields[`profile.${key}`] = value;
-      }
-    }
-
-    // busca un usuario activo con el id de la url y le aplica los cambios
-    // $set modifica solo los campos indicados
-    // new: true devuelve el usuario ya actualizado
-    // runValidators aplica las validaciones del schema al actualizar
-    // select("-password") evita devolver la password al cliente
-    const updatedUser = await UserModel.findOneAndUpdate(
-      { _id: req.params.id, deletedAt: null },
-      { $set: updateFields },
-      { new: true, runValidators: true },
-    ).select("-password");
-
-    // si no existe o esta eliminado, responde 404
-    if (!updatedUser) {
-      return res.status(404).json({ message: "Usuario no encontrado" });
-    }
-
-    return res.json({
-      message: "Usuario actualizado correctamente",
-      user: updatedUser,
-    });
-  } catch (error) {
-    // el codigo 11000 indica un valor duplicado en un campo unico
-    if (error.code === 11000) {
-      return res
-        .status(400)
-        .json({ message: "El email o username ya está en uso" });
-    }
-    // cualquier otro error inesperado responde 500
-    return res.status(500).json({ message: "Error interno del servidor" });
-  }
-};
-// eliminacion logica de un usuario y eliminacion en cascada de sus eventos
-export const deleteUser = async (req, res) => {
-  try {
-    // no borra el usuario, solo guarda la fecha de eliminacion en deletedAt
-    // el filtro deletedAt: null evita eliminar un usuario ya eliminado
-    // new: true devuelve el usuario ya modificado
-    const user = await UserModel.findOneAndUpdate(
-      { _id: req.params.id, deletedAt: null },
-      { deletedAt: new Date() },
-      { new: true },
+    // findByIdAndUpdate busca un usuario por id y lo modifican
+    // sin esto devolveria el usuario como estaba antes del cambio
+    const userUpdated = await UserModel.findByIdAndUpdate(
+      { _id: id },
+      { $set: { ...dataValida } }, // $set cambia solo los campos indicados y deja los demas como estan
+      // ...dataValida copia todos los campos validados dentro de $set
+      { returnDocument: "after" },
+      // returnDocument: "after" devuelve el usuario ya modificado
     );
 
-    // si no existe o ya estaba eliminado, responde 404
-    if (!user) {
-      return res.status(404).json({ message: "Usuario no encontrado" });
-    }
-
-    // cascada: borra todos los eventos organizados por ese usuario
-    await eventModel.deleteMany({ organizer: req.params.id });
-
-    return res.status(200).json({ message: "Usuario eliminado correctamente" });
+    return res
+      .status(200)
+      .json({ msg: "El usuario fue editado exitozamente", userUpdated });
   } catch (error) {
-    // cualquier error inesperado responde 500
-    return res.status(500).json({ message: "Error interno del servidor" });
+    console.log(error);
+    return res.status(500).json({ msg: "error interno en el servidor" });
+  }
+};
+
+// eliminacion logica de un usuario y eliminacion en cascada de sus eventos
+export const deletUser = async (req, res) => {
+  try {
+    // "params" son los parametros de la url, aca se toma el id del usuario
+    const { id } = matchedData(req, { locations: ["params"] });
+
+    // deleteMany borra todos los eventos cuyo organizer sea este usuario (cascada)
+    await eventModel.deleteMany({ organizer: id }); // organizer es el campo del evento que guarda el id del usuario que lo creo
+
+    // no borra el usuario, $set guarda la fecha de eliminacion en deletedAt
+    const userUpdated = await UserModel.findByIdAndUpdate(
+      { _id: id },
+      { $set: { deletedAt: new Date() } },
+      { returnDocument: "after" }, // returnDocument: "after" devuelve el usuario ya modificado
+    );
+
+    return res
+      .status(200)
+      .json({ msg: "El usuario fue eliminado exitozamente", userUpdated });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({ msg: "error interno en el servidor" });
   }
 };
