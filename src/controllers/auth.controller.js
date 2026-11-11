@@ -1,4 +1,4 @@
-// controladores de autenticación, sirven para manejar las rutas de autenticación, como login, register, etc.
+// sirven para manejar las rutas de autenticación, como login, register, etc.
 import { matchedData } from "express-validator";
 import { UserModel } from "../models/user.model.js";
 import { comparePassword, hashPassword } from "../helpers/bcrypt.helper.js";
